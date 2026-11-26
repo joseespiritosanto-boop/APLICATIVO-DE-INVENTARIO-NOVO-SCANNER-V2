@@ -17,7 +17,7 @@
     }
     .top {
       background: linear-gradient(135deg, #EE4D2D, #FF6B3D);
-      padding: 12px 14px;
+      padding: 10px 14px;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -42,14 +42,18 @@
     #reader {
       width: 100%;
       flex: 1;
-      min-height: 250px;
-      max-height: 46vh;
+      min-height: 240px;
+      max-height: 48vh;
       background: #000;
       overflow: hidden;
     }
-    #reader video { object-fit: cover !important; }
+    #reader video {
+      width: 100% !important;
+      height: 100% !important;
+      object-fit: cover !important;
+    }
     .status-bar {
-      padding: 10px 14px;
+      padding: 9px 14px;
       background: #1E293B;
       font-size: 12.5px;
       font-weight: 700;
@@ -64,13 +68,13 @@
     .historico {
       background: #0B1120;
       padding: 6px 12px;
-      font-size: 11px;
-      color: #94A3B8;
-      max-height: 54px;
+      font-size: 11.5px;
+      color: #CBD5E1;
+      max-height: 58px;
       overflow-y: auto;
       border-bottom: 1px solid #1E293B;
     }
-    .historico div { padding: 2px 0; border-bottom: 1px dashed rgba(148,163,184,0.12); }
+    .historico div { padding: 2px 0; border-bottom: 1px dashed rgba(148,163,184,0.14); }
     .panel {
       padding: 10px 12px 14px;
       background: #1E293B;
@@ -210,18 +214,29 @@
     }
 
     function enviarParaApi(codigo, modo, local) {
-      if (!API_URL) return Promise.resolve({ ok: false, msg: "Sem API_URL" });
+      if (!API_URL) {
+        return Promise.resolve({ ok: false, msg: "Sem API_URL (abra pelo Painel)" });
+      }
       var bodyStr = JSON.stringify({
         acao: modo === "ELETRONICOS" ? "BIPAR_ELETRONICO" : "BIPAR_INVENTARIO",
         codigo: codigo,
         local: local
       });
 
-      return fetch(API_URL, { method: "POST", body: bodyStr })
+      return fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: bodyStr
+      })
         .then(function(r) { return r.json(); })
         .catch(function() {
-          return fetch(API_URL, { method: "POST", mode: "no-cors", body: bodyStr })
-            .then(function() { return { ok: true, msg: "Enviado (fila)" }; })
+          return fetch(API_URL, {
+            method: "POST",
+            mode: "no-cors",
+            headers: { "Content-Type": "text/plain;charset=utf-8" },
+            body: bodyStr
+          })
+            .then(function() { return { ok: true, msg: "Enviado" }; })
             .catch(function(e) { return { ok: false, msg: e.message }; });
         });
     }
@@ -249,11 +264,14 @@
       filaEnvio = filaEnvio.then(function() {
         return enviarParaApi(codigo, modo, local).then(function(res) {
           var box = document.getElementById("historicoBox");
+          var textoFinal = res.ok ? (res.msg || "OK") : ("Falha: " + (res.msg || "Sem API"));
           if (box.firstChild) {
-            box.firstChild.textContent = box.firstChild.textContent.replace("enviando...", res.ok ? "OK" : (res.msg || "Erro"));
+            box.firstChild.textContent = box.firstChild.textContent.replace("enviando...", textoFinal);
           }
           if (!res.ok) {
-            setStatus("err", "⚠️ " + codigo + ": " + (res.msg || "Falha no envio"));
+            setStatus("err", "⚠️ " + codigo + " — " + textoFinal);
+          } else {
+            setStatus("ok", "✅ " + codigo + " (" + textoFinal + ")");
           }
         });
       });
@@ -268,30 +286,48 @@
         Html5QrcodeSupportedFormats.ITF,
         Html5QrcodeSupportedFormats.DATA_MATRIX
       ];
+      if (html5Qr) {
+        try { html5Qr.clear(); } catch (e) {}
+      }
       html5Qr = new Html5Qrcode("reader", { formatsToSupport: formatos, verbose: false });
       html5Qr.start(
         deviceId || { facingMode: "environment" },
         {
-          fps: 15,
+          fps: 12,
           qrbox: function(w, h) {
-            var m = Math.floor(Math.min(w, h) * 0.85);
-            return { width: m, height: Math.floor(m * 0.55) };
+            var boxW = Math.min(320, Math.floor(w * 0.72));
+            var boxH = Math.min(180, Math.floor(h * 0.42));
+            return { width: Math.max(160, boxW), height: Math.max(100, boxH) };
           }
         },
         function(texto) {
           var agora = Date.now();
-          if (texto === ultimoCod && (agora - ultimoTs) < 1200) return;
+          if (texto === ultimoCod && (agora - ultimoTs) < 1400) return;
           ultimoCod = texto;
           ultimoTs = agora;
           processarCodigo(texto);
         },
         function() {}
       ).catch(function() {
-        setStatus("err", "❌ Permita a câmera nas configurações do navegador.");
+        setStatus("err", "❌ Permita a câmera ou clique em '🔄 Câmera' para selecionar.");
       });
     }
 
     function trocarCamera() {
+      if (!cameras || cameras.length === 0) {
+        Html5Qrcode.getCameras().then(function(devs) {
+          cameras = devs || [];
+          if (cameras.length > 0) {
+            idxCam = (idxCam + 1) % cameras.length;
+            if (html5Qr) {
+              html5Qr.stop().then(function() { iniciarCamera(cameras[idxCam].id); });
+            } else {
+              iniciarCamera(cameras[idxCam].id);
+            }
+          }
+        });
+        return;
+      }
       if (cameras.length < 2) return;
       idxCam = (idxCam + 1) % cameras.length;
       if (html5Qr) {
