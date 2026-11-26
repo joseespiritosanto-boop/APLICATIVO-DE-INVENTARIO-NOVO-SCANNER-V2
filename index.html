@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-  <title>SPX Scanner Mobile (GitHub)</title>
+  <title>SPX Scanner Rápido</title>
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       background: #0F172A;
@@ -17,38 +17,62 @@
     }
     .top {
       background: linear-gradient(135deg, #EE4D2D, #FF6B3D);
-      padding: 14px 16px;
+      padding: 12px 14px;
       display: flex;
       align-items: center;
       justify-content: space-between;
       font-weight: 800;
-      font-size: 15px;
+      font-size: 14px;
+    }
+    .top-right { display: flex; align-items: center; gap: 8px; }
+    .badge-cnt {
+      background: #0F172A;
+      color: #34D399;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 900;
     }
     .badge-modo {
-      background: rgba(0,0,0,0.25);
-      padding: 4px 10px;
+      background: rgba(0,0,0,0.28);
+      padding: 4px 9px;
       border-radius: 999px;
       font-size: 11px;
     }
     #reader {
       width: 100%;
       flex: 1;
-      min-height: 300px;
+      min-height: 250px;
+      max-height: 46vh;
       background: #000;
+      overflow: hidden;
     }
     #reader video { object-fit: cover !important; }
     .status-bar {
-      padding: 12px 16px;
+      padding: 10px 14px;
       background: #1E293B;
-      font-size: 13px;
+      font-size: 12.5px;
       font-weight: 700;
       text-align: center;
       border-top: 1px solid #334155;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .status-bar.ok { background: #065F46; color: #D1FAE5; }
     .status-bar.err { background: #991B1B; color: #FEE2E2; }
+    .historico {
+      background: #0B1120;
+      padding: 6px 12px;
+      font-size: 11px;
+      color: #94A3B8;
+      max-height: 54px;
+      overflow-y: auto;
+      border-bottom: 1px solid #1E293B;
+    }
+    .historico div { padding: 2px 0; border-bottom: 1px dashed rgba(148,163,184,0.12); }
     .panel {
-      padding: 12px 14px;
+      padding: 10px 12px 14px;
       background: #1E293B;
       display: flex;
       flex-direction: column;
@@ -56,72 +80,113 @@
     }
     select, input {
       width: 100%;
-      padding: 11px;
+      padding: 10px 11px;
       border-radius: 9px;
       border: 1px solid #475569;
       background: #0F172A;
       color: #FFF;
-      font-size: 14px;
+      font-size: 13.5px;
+      outline: none;
     }
+    input:focus, select:focus { border-color: #EE4D2D; }
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
     .btn {
-      padding: 13px;
+      padding: 11px;
       border: none;
-      border-radius: 10px;
+      border-radius: 9px;
       font-weight: 800;
-      font-size: 14px;
+      font-size: 13px;
       color: #FFF;
       cursor: pointer;
     }
-    .btn-switch { background: #3B82F6; }
+    .btn:active { transform: scale(0.98); }
+    .btn-switch { background: #2563EB; }
     .btn-send { background: #EE4D2D; }
-    .btn-close { background: #475569; }
+    .btn-clear { background: #334155; }
   </style>
 </head>
 <body>
 
   <div class="top">
-    <span>📷 SPX Scanner Mobile</span>
-    <span class="badge-modo" id="lblModo">INVENTÁRIO</span>
+    <span>⚡ SPX Inventário Rápido</span>
+    <div class="top-right">
+      <span class="badge-modo" id="lblModo">INVENTÁRIO</span>
+      <span class="badge-cnt" id="cntLidos">0 lidos</span>
+    </div>
   </div>
 
   <div id="reader"></div>
-  <div class="status-bar" id="statusBar">Aponte a câmera para o QR Code ou código de barras</div>
+  <div class="status-bar" id="statusBar">Aponte para o código — bipagem contínua ativa</div>
+  <div class="historico" id="historicoBox">Aguardando primeira leitura...</div>
 
   <div class="panel">
     <div class="row">
-      <select id="selModo" onchange="document.getElementById('lblModo').textContent = this.options[this.selectedIndex].text">
+      <select id="selModo" onchange="salvarPrefs()">
         <option value="INVENTARIO">📦 Inventário Geral</option>
         <option value="ELETRONICOS">🖨️ Eletrônicos</option>
       </select>
-      <input type="text" id="inpLocal" placeholder="Local (opcional)" />
+      <input type="text" id="inpLocal" placeholder="Local (salva auto)" oninput="salvarPrefs()" />
     </div>
 
     <div class="row">
-      <input type="text" id="inpManual" placeholder="Digitar código..." />
-      <button class="btn btn-send" onclick="processarCodigo(document.getElementById('inpManual').value)">✅ Validar</button>
+      <input type="text" id="inpManual" placeholder="Serial / QR / Leitor..." onkeydown="if(event.key==='Enter'){processarCodigo(this.value);}" />
+      <button class="btn btn-send" onclick="processarCodigo(document.getElementById('inpManual').value)">✅ Bip / Validar</button>
     </div>
 
     <div class="row">
-      <button class="btn btn-switch" onclick="trocarCamera()">🔄 Trocar Câmera</button>
-      <button class="btn btn-close" onclick="window.close()">✕ Fechar</button>
+      <button class="btn btn-switch" onclick="trocarCamera()">🔄 Câmera</button>
+      <button class="btn btn-clear" onclick="zerarContador()">↺ Zerar (0)</button>
     </div>
   </div>
 
   <script>
     var params = new URLSearchParams(window.location.search);
     var API_URL = params.get("api") || localStorage.getItem("SPX_WEBAPP_API") || "";
-    var MODO_INICIAL = params.get("modo") || "INVENTARIO";
+    var MODO_INICIAL = params.get("modo") || localStorage.getItem("SPX_MODO_SCAN") || "INVENTARIO";
+    var LOCAL_SALVO = localStorage.getItem("SPX_LOCAL_SCAN") || "";
 
     if (API_URL) localStorage.setItem("SPX_WEBAPP_API", API_URL);
     document.getElementById("selModo").value = MODO_INICIAL;
-    document.getElementById("lblModo").textContent = MODO_INICIAL === "ELETRONICOS" ? "🖨️ Eletrônicos" : "📦 Inventário Geral";
+    document.getElementById("inpLocal").value = LOCAL_SALVO;
+    atualizarBadgeModo();
 
+    var totalLidos = 0;
     var html5Qr = null;
     var cameras = [];
     var idxCam = 0;
     var ultimoCod = "";
     var ultimoTs = 0;
+    var filaEnvio = Promise.resolve();
+
+    function atualizarBadgeModo() {
+      var m = document.getElementById("selModo").value;
+      document.getElementById("lblModo").textContent = m === "ELETRONICOS" ? "🖨️ Eletrônicos" : "📦 Inventário";
+    }
+
+    function salvarPrefs() {
+      atualizarBadgeModo();
+      localStorage.setItem("SPX_MODO_SCAN", document.getElementById("selModo").value);
+      localStorage.setItem("SPX_LOCAL_SCAN", document.getElementById("inpLocal").value.trim());
+    }
+
+    function zerarContador() {
+      totalLidos = 0;
+      document.getElementById("cntLidos").textContent = "0 lidos";
+      document.getElementById("historicoBox").innerHTML = "Contador zerado.";
+    }
+
+    function adicionarHistorico(cod, okTexto) {
+      totalLidos++;
+      document.getElementById("cntLidos").textContent = totalLidos + " lidos";
+      var box = document.getElementById("historicoBox");
+      if (box.textContent.indexOf("Aguardando") === 0 || box.textContent.indexOf("Contador zerado") === 0) {
+        box.innerHTML = "";
+      }
+      var hora = new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      var linha = document.createElement("div");
+      linha.textContent = "[" + hora + "] " + cod + " — " + okTexto;
+      box.insertBefore(linha, box.firstChild);
+    }
 
     function setStatus(tipo, texto) {
       var el = document.getElementById("statusBar");
@@ -129,43 +194,69 @@
       el.textContent = texto;
     }
 
-    async function processarCodigo(raw) {
+    function bipSonoro() {
+      try {
+        var ctx = new (window.AudioContext || window.webkitAudioContext)();
+        var osc = ctx.createOscillator();
+        var gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.value = 1050;
+        gain.gain.value = 0.08;
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        setTimeout(function() { osc.stop(); ctx.close(); }, 80);
+      } catch (e) {}
+    }
+
+    function enviarParaApi(codigo, modo, local) {
+      if (!API_URL) return Promise.resolve({ ok: false, msg: "Sem API_URL" });
+      var bodyStr = JSON.stringify({
+        acao: modo === "ELETRONICOS" ? "BIPAR_ELETRONICO" : "BIPAR_INVENTARIO",
+        codigo: codigo,
+        local: local
+      });
+
+      return fetch(API_URL, { method: "POST", body: bodyStr })
+        .then(function(r) { return r.json(); })
+        .catch(function() {
+          return fetch(API_URL, { method: "POST", mode: "no-cors", body: bodyStr })
+            .then(function() { return { ok: true, msg: "Enviado (fila)" }; })
+            .catch(function(e) { return { ok: false, msg: e.message }; });
+        });
+    }
+
+    function processarCodigo(raw) {
       var codigo = String(raw || "").trim();
       if (!codigo) return;
 
-      if (navigator.vibrate) navigator.vibrate(110);
-      setStatus("", "⏳ Validando: " + codigo + "...");
-
-      if (window.opener && !window.opener.closed) {
-        window.opener.postMessage({ tipo: "SPX_CODIGO_LIDO", codigo: codigo }, "*");
-        setStatus("ok", "✅ Enviado ao Painel: " + codigo);
-        document.getElementById("inpManual").value = "";
-        return;
-      }
-
-      if (!API_URL) {
-        setStatus("err", "⚠️ Link da API não configurado. Abra pelo botão 'Scanner GitHub' no Painel SPX.");
-        return;
-      }
+      if (navigator.vibrate) navigator.vibrate(70);
+      bipSonoro();
 
       var modo = document.getElementById("selModo").value;
       var local = document.getElementById("inpLocal").value.trim();
 
-      try {
-        var resp = await fetch(API_URL, {
-          method: "POST",
-          body: JSON.stringify({
-            acao: modo === "ELETRONICOS" ? "BIPAR_ELETRONICO" : "BIPAR_INVENTARIO",
-            codigo: codigo,
-            local: local
-          })
-        });
-        var json = await resp.json();
-        setStatus(json.ok ? "ok" : "err", json.msg || codigo);
-        document.getElementById("inpManual").value = "";
-      } catch (e) {
-        setStatus("err", "❌ Erro de conexão: " + e.message);
+      if (window.opener && !window.opener.closed) {
+        try {
+          window.opener.postMessage({ tipo: "SPX_CODIGO_LIDO", codigo: codigo, modo: modo, local: local }, "*");
+        } catch (e) {}
       }
+
+      document.getElementById("inpManual").value = "";
+      setStatus("ok", "⚡ Bipado: " + codigo);
+      adicionarHistorico(codigo, "enviando...");
+
+      filaEnvio = filaEnvio.then(function() {
+        return enviarParaApi(codigo, modo, local).then(function(res) {
+          var box = document.getElementById("historicoBox");
+          if (box.firstChild) {
+            box.firstChild.textContent = box.firstChild.textContent.replace("enviando...", res.ok ? "OK" : (res.msg || "Erro"));
+          }
+          if (!res.ok) {
+            setStatus("err", "⚠️ " + codigo + ": " + (res.msg || "Falha no envio"));
+          }
+        });
+      });
     }
 
     function iniciarCamera(deviceId) {
@@ -181,22 +272,22 @@
       html5Qr.start(
         deviceId || { facingMode: "environment" },
         {
-          fps: 12,
+          fps: 15,
           qrbox: function(w, h) {
-            var m = Math.floor(Math.min(w, h) * 0.8);
-            return { width: m, height: Math.floor(m * 0.6) };
+            var m = Math.floor(Math.min(w, h) * 0.85);
+            return { width: m, height: Math.floor(m * 0.55) };
           }
         },
         function(texto) {
           var agora = Date.now();
-          if (texto === ultimoCod && (agora - ultimoTs) < 2500) return;
+          if (texto === ultimoCod && (agora - ultimoTs) < 1200) return;
           ultimoCod = texto;
           ultimoTs = agora;
           processarCodigo(texto);
         },
         function() {}
-      ).catch(function(err) {
-        setStatus("err", "❌ Permita o acesso à câmera nas configurações do navegador.");
+      ).catch(function() {
+        setStatus("err", "❌ Permita a câmera nas configurações do navegador.");
       });
     }
 
