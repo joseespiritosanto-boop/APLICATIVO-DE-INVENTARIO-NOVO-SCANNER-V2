@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>SPX Scanner Mobile (GitHub)</title>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0F172A;
+      color: #FFF;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .top {
+      background: linear-gradient(135deg, #EE4D2D, #FF6B3D);
+      padding: 14px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-weight: 800;
+      font-size: 15px;
+    }
+    .badge-modo {
+      background: rgba(0,0,0,0.25);
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+    }
+    #reader {
+      width: 100%;
+      flex: 1;
+      min-height: 300px;
+      background: #000;
+    }
+    #reader video { object-fit: cover !important; }
+    .status-bar {
+      padding: 12px 16px;
+      background: #1E293B;
+      font-size: 13px;
+      font-weight: 700;
+      text-align: center;
+      border-top: 1px solid #334155;
+    }
+    .status-bar.ok { background: #065F46; color: #D1FAE5; }
+    .status-bar.err { background: #991B1B; color: #FEE2E2; }
+    .panel {
+      padding: 12px 14px;
+      background: #1E293B;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    select, input {
+      width: 100%;
+      padding: 11px;
+      border-radius: 9px;
+      border: 1px solid #475569;
+      background: #0F172A;
+      color: #FFF;
+      font-size: 14px;
+    }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .btn {
+      padding: 13px;
+      border: none;
+      border-radius: 10px;
+      font-weight: 800;
+      font-size: 14px;
+      color: #FFF;
+      cursor: pointer;
+    }
+    .btn-switch { background: #3B82F6; }
+    .btn-send { background: #EE4D2D; }
+    .btn-close { background: #475569; }
+  </style>
+</head>
+<body>
+
+  <div class="top">
+    <span>📷 SPX Scanner Mobile</span>
+    <span class="badge-modo" id="lblModo">INVENTÁRIO</span>
+  </div>
+
+  <div id="reader"></div>
+  <div class="status-bar" id="statusBar">Aponte a câmera para o QR Code ou código de barras</div>
+
+  <div class="panel">
+    <div class="row">
+      <select id="selModo" onchange="document.getElementById('lblModo').textContent = this.options[this.selectedIndex].text">
+        <option value="INVENTARIO">📦 Inventário Geral</option>
+        <option value="ELETRONICOS">🖨️ Eletrônicos</option>
+      </select>
+      <input type="text" id="inpLocal" placeholder="Local (opcional)" />
+    </div>
+
+    <div class="row">
+      <input type="text" id="inpManual" placeholder="Digitar código..." />
+      <button class="btn btn-send" onclick="processarCodigo(document.getElementById('inpManual').value)">✅ Validar</button>
+    </div>
+
+    <div class="row">
+      <button class="btn btn-switch" onclick="trocarCamera()">🔄 Trocar Câmera</button>
+      <button class="btn btn-close" onclick="window.close()">✕ Fechar</button>
+    </div>
+  </div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var API_URL = params.get("api") || localStorage.getItem("SPX_WEBAPP_API") || "";
+    var MODO_INICIAL = params.get("modo") || "INVENTARIO";
+
+    if (API_URL) localStorage.setItem("SPX_WEBAPP_API", API_URL);
+    document.getElementById("selModo").value = MODO_INICIAL;
+    document.getElementById("lblModo").textContent = MODO_INICIAL === "ELETRONICOS" ? "🖨️ Eletrônicos" : "📦 Inventário Geral";
+
+    var html5Qr = null;
+    var cameras = [];
+    var idxCam = 0;
+    var ultimoCod = "";
+    var ultimoTs = 0;
+
+    function setStatus(tipo, texto) {
+      var el = document.getElementById("statusBar");
+      el.className = "status-bar " + (tipo || "");
+      el.textContent = texto;
+    }
+
+    async function processarCodigo(raw) {
+      var codigo = String(raw || "").trim();
+      if (!codigo) return;
+
+      if (navigator.vibrate) navigator.vibrate(110);
+      setStatus("", "⏳ Validando: " + codigo + "...");
+
+      if (window.opener && !window.opener.closed) {
+        window.opener.postMessage({ tipo: "SPX_CODIGO_LIDO", codigo: codigo }, "*");
+        setStatus("ok", "✅ Enviado ao Painel: " + codigo);
+        document.getElementById("inpManual").value = "";
+        return;
+      }
+
+      if (!API_URL) {
+        setStatus("err", "⚠️ Link da API não configurado. Abra pelo botão 'Scanner GitHub' no Painel SPX.");
+        return;
+      }
+
+      var modo = document.getElementById("selModo").value;
+      var local = document.getElementById("inpLocal").value.trim();
+
+      try {
+        var resp = await fetch(API_URL, {
+          method: "POST",
+          body: JSON.stringify({
+            acao: modo === "ELETRONICOS" ? "BIPAR_ELETRONICO" : "BIPAR_INVENTARIO",
+            codigo: codigo,
+            local: local
+          })
+        });
+        var json = await resp.json();
+        setStatus(json.ok ? "ok" : "err", json.msg || codigo);
+        document.getElementById("inpManual").value = "";
+      } catch (e) {
+        setStatus("err", "❌ Erro de conexão: " + e.message);
+      }
+    }
+
+    function iniciarCamera(deviceId) {
+      var formatos = [
+        Html5QrcodeSupportedFormats.QR_CODE,
+        Html5QrcodeSupportedFormats.CODE_128,
+        Html5QrcodeSupportedFormats.CODE_39,
+        Html5QrcodeSupportedFormats.EAN_13,
+        Html5QrcodeSupportedFormats.ITF,
+        Html5QrcodeSupportedFormats.DATA_MATRIX
+      ];
+      html5Qr = new Html5Qrcode("reader", { formatsToSupport: formatos, verbose: false });
+      html5Qr.start(
+        deviceId || { facingMode: "environment" },
+        {
+          fps: 12,
+          qrbox: function(w, h) {
+            var m = Math.floor(Math.min(w, h) * 0.8);
+            return { width: m, height: Math.floor(m * 0.6) };
+          }
+        },
+        function(texto) {
+          var agora = Date.now();
+          if (texto === ultimoCod && (agora - ultimoTs) < 2500) return;
+          ultimoCod = texto;
+          ultimoTs = agora;
+          processarCodigo(texto);
+        },
+        function() {}
+      ).catch(function(err) {
+        setStatus("err", "❌ Permita o acesso à câmera nas configurações do navegador.");
+      });
+    }
+
+    function trocarCamera() {
+      if (cameras.length < 2) return;
+      idxCam = (idxCam + 1) % cameras.length;
+      if (html5Qr) {
+        html5Qr.stop().then(function() { iniciarCamera(cameras[idxCam].id); });
+      }
+    }
+
+    window.addEventListener("load", function() {
+      Html5Qrcode.getCameras().then(function(devs) {
+        cameras = devs || [];
+        for (var i = 0; i < cameras.length; i++) {
+          var lbl = (cameras[i].label || "").toLowerCase();
+          if (lbl.indexOf("back") >= 0 || lbl.indexOf("rear") >= 0 || lbl.indexOf("traseira") >= 0 || lbl.indexOf("environment") >= 0) {
+            idxCam = i;
+            break;
+          }
+        }
+        iniciarCamera(cameras[idxCam] ? cameras[idxCam].id : null);
+      }).catch(function() {
+        iniciarCamera(null);
+      });
+    });
+  </script>
+</body>
+</html>
