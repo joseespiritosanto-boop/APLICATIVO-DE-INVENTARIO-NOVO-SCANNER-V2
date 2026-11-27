@@ -107,6 +107,12 @@
     .btn-switch { background: #2563EB; }
     .btn-send { background: #EE4D2D; }
     .btn-clear { background: #334155; }
+
+    /* Desktop: sem câmera nem botão de troca de câmera */
+    @media (min-width: 768px) and (pointer: fine) {
+      #reader, .btn-switch { display: none !important; }
+      .panel .row:last-child { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
@@ -161,6 +167,13 @@
     var ultimoCod = "";
     var ultimoTs = 0;
     var filaEnvio = Promise.resolve();
+
+    function isMobileScanner() {
+      var isSmallScreen = window.innerWidth < 768;
+      var hasTouch = navigator.maxTouchPoints > 0 || "ontouchstart" in window;
+      var mobileUA = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+      return isSmallScreen || (hasTouch && mobileUA);
+    }
 
     function atualizarBadgeModo() {
       var m = document.getElementById("selModo").value;
@@ -278,6 +291,10 @@
     }
 
     function iniciarCamera(deviceId) {
+      if (!isMobileScanner()) {
+        setStatus("", "Modo Desktop ativo: digite ou use leitor USB no campo abaixo");
+        return;
+      }
       var formatos = [
         Html5QrcodeSupportedFormats.QR_CODE,
         Html5QrcodeSupportedFormats.CODE_128,
@@ -314,6 +331,7 @@
     }
 
     function trocarCamera() {
+      if (!isMobileScanner()) return;
       if (!cameras || cameras.length === 0) {
         Html5Qrcode.getCameras().then(function(devs) {
           cameras = devs || [];
@@ -336,6 +354,10 @@
     }
 
     window.addEventListener("load", function() {
+      if (!isMobileScanner()) {
+        setStatus("", "Modo Desktop ativo: digite ou use leitor USB no campo abaixo");
+        return;
+      }
       Html5Qrcode.getCameras().then(function(devs) {
         cameras = devs || [];
         for (var i = 0; i < cameras.length; i++) {
