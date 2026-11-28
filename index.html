@@ -6,8 +6,10 @@
   <meta name="theme-color" content="#111827">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="preconnect" href="https://unpkg.com" crossorigin>
+  <link rel="dns-prefetch" href="https://unpkg.com">
   <title>SPX Inventário Mobile</title>
-  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <!-- html5-qrcode é carregado sob demanda ao ativar a câmera -->
   <style>
     :root{--spx:#ee4d2d;--bg:#0f172a;--panel:#1e293b;--panel2:#29364d;--surface:#fff;--text:#f8fafc;--muted:#aab5c7;--ok:#22c55e;--warn:#f59e0b;--danger:#ef4444;--line:#334155}
     *{box-sizing:border-box}html,body{margin:0;min-height:100%;font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}body{padding:env(safe-area-inset-top) 0 calc(18px + env(safe-area-inset-bottom));}
@@ -82,7 +84,8 @@
       <div class="light-field"><label>Email de alocação</label><input id="assetEmail" type="email" placeholder="email@empresa.com"></div>
     </div>
     <div class="light-field"><label>Observação</label><textarea id="assetObs" rows="2" placeholder="Observação opcional"></textarea></div>
-    <div class="modal-actions"><button class="btn btn-light" onclick="confirmar(false)">Manter local cadastrado</button><button class="btn btn-primary" onclick="confirmar(true)">Confirmar e atualizar local</button></div>
+    <div id="confirmError" class="warnbox" style="display:none" role="alert"></div>
+    <div class="modal-actions"><button class="btn btn-light" id="keepLocationBtn" onclick="confirmar(false)">Manter local cadastrado</button><button class="btn btn-primary" id="updateLocationBtn" onclick="confirmar(true)">Confirmar e atualizar local</button></div>
   </div>
 </div>
 
@@ -124,11 +127,29 @@
   var somAtivo = localStorage.getItem('SPX_MOBILE_SOUND') !== 'OFF';
   var vibracaoAtiva = localStorage.getItem('SPX_MOBILE_VIBRATION') !== 'OFF';
   var codeFormats = [];
+  var scanAudioContext = null;
+  var confirmInProgress = false;
+  var confirmOperationCode = '';
+  var confirmOperationId = '';
 
   function el(id){return document.getElementById(id);}
-  function toast(msg){var t=el('toast');t.textContent=msg;t.style.display='block';clearTimeout(window._toastTimer);window._toastTimer=setTimeout(function(){t.style.display='none';},2600);}
+  function toast(msg){var t=el('toast');t.textContent=msg;t.style.display='block';clearTimeout(window._toastTimer);window._toastTimer=setTimeout(function(){t.style.display='none';},4200);}
   function setCamStatus(txt,cls){el('cameraStatus').textContent=txt;el('cameraStatus').className='status '+(cls||'');}
   function setBusy(v){cameraBusy=Boolean(v);el('startCameraBtn').disabled=v;}
+  var scannerLibraryPromise=null;
+  function carregarBibliotecaScanner(){
+    if(typeof Html5Qrcode!=='undefined')return Promise.resolve();
+    if(scannerLibraryPromise)return scannerLibraryPromise;
+    scannerLibraryPromise=new Promise(function(resolve,reject){
+      var script=document.createElement('script');
+      script.src='https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js';
+      script.async=true;
+      script.onload=function(){if(typeof Html5Qrcode!=='undefined')resolve();else reject(new Error('A biblioteca do scanner não foi inicializada.'));};
+      script.onerror=function(){scannerLibraryPromise=null;reject(new Error('Não foi possível carregar o scanner. Verifique sua conexão e tente novamente.'));};
+      document.head.appendChild(script);
+    });
+    return scannerLibraryPromise;
+  }
   function randomId(){return 'MOB-'+Date.now()+'-'+Math.floor(Math.random()*1000000);}
   function sendToParent(type, request, requestId){
     if(!window.opener || window.opener.closed) throw new Error('Painel de origem não está aberto.');
@@ -136,18 +157,22 @@
   }
   function request(action, data){
     return new Promise(function(resolve,reject){
-      if(!bridgeReady && action!=='CONTEXTO') return reject(new Error('Conexão com o Apps Script ainda não está pronta.'));
+      if(!bridgeReady && action!=='CONTEXTO') return reject(new Error('Conexão com o Apps Script ainda não está pronta. Feche esta guia e abra novamente pelo painel SPX.'));
       var id='R'+(++requestCounter)+'-'+Date.now();
-      pending[id]={resolve:resolve,reject:reject};
-      try{sendToParent('SPX_MOBILE_REQUEST',{acao:action,dados:data||{},codigo:data&&data.codigo||''},id);}catch(e){delete pending[id];reject(e);return;}
-      setTimeout(function(){if(pending[id]){delete pending[id];reject(new Error('O servidor não respondeu. Verifique a guia do Apps Script.'));}},25000);
+      var timer=setTimeout(function(){
+        if(pending[id]){delete pending[id];reject(new Error('Tempo esgotado ao comunicar com o Apps Script. Mantenha a guia principal aberta e tente novamente.'));}
+      },40000);
+      pending[id]={resolve:function(v){clearTimeout(timer);resolve(v);},reject:function(e){clearTimeout(timer);reject(e);}};
+      try{sendToParent('SPX_MOBILE_REQUEST',{acao:action,dados:data||{},codigo:data&&data.codigo||''},id);}
+      catch(e){clearTimeout(timer);delete pending[id];reject(e);}
     });
   }
   function handshake(){
+    setCamStatus('Conectando ao inventário','');
     if(!bridgeId || !window.opener || window.opener.closed){el('bridgeError').style.display='block';setCamStatus('Sem conexão','err');el('startCameraBtn').disabled=true;return;}
     var id='HELLO-'+Date.now();pending[id]={resolve:function(res){bridgeReady=true;contextLoaded(res);},reject:function(err){el('bridgeError').style.display='block';toast(err.message);}};
     try{sendToParent('SPX_MOBILE_READY',{acao:'CONTEXTO'},id);}catch(e){pending[id].reject(e);}
-    setTimeout(function(){if(!bridgeReady){el('bridgeError').style.display='block';setCamStatus('Aguardando Apps Script','err');}},7000);
+    setTimeout(function(){if(!bridgeReady){el('bridgeError').style.display='block';setCamStatus('Servidor demorando a responder','err');}},15000);
   }
   window.addEventListener('message',function(ev){
     if(ev.source!==window.opener || !ev.data || ev.data.type!=='SPX_BRIDGE_RESPONSE' || ev.data.bridgeId!==bridgeId) return;
@@ -183,9 +208,34 @@
   }
   function atualizarLocalResumo(){var v=el('locationSelect').value;localStorage.setItem('SPX_MOBILE_LOCATION',v);el('foundLocation').value=v;el('newEquipLocation').value=v;}
   window.atualizarLocalResumo=atualizarLocalResumo;
-  function playFeedback(){if(vibracaoAtiva && navigator.vibrate)navigator.vibrate(75);if(!somAtivo)return;try{var Ctx=window.AudioContext||window.webkitAudioContext;if(!Ctx)return;var ctx=new Ctx(),osc=ctx.createOscillator(),gain=ctx.createGain();osc.frequency.value=1040;gain.gain.value=.07;osc.connect(gain);gain.connect(ctx.destination);osc.start();setTimeout(function(){osc.stop();ctx.close();},85);}catch(e){}}
-  function playError(){if(vibracaoAtiva && navigator.vibrate)navigator.vibrate([80,40,80]);}
-  function alternarSom(){somAtivo=!somAtivo;localStorage.setItem('SPX_MOBILE_SOUND',somAtivo?'ON':'OFF');el('soundBtn').textContent='♫ Som: '+(somAtivo?'ON':'OFF');}
+  // O Chrome Android exige que o AudioContext seja desbloqueado por um gesto do usuário.
+  // Por isso ele é criado/resumido no toque em Ativar câmera ou no botão Som, não só no callback do scanner.
+  function desbloquearAudio(){
+    try{
+      var Ctx=window.AudioContext||window.webkitAudioContext;
+      if(!Ctx)return false;
+      if(!scanAudioContext)scanAudioContext=new Ctx();
+      if(scanAudioContext.state==='suspended')scanAudioContext.resume().catch(function(){});
+      return true;
+    }catch(e){return false;}
+  }
+  function tocarTom(freq,duracao){
+    if(!somAtivo)return;
+    try{
+      if(!desbloquearAudio()||!scanAudioContext)return;
+      var ctx=scanAudioContext;
+      if(ctx.state!=='running'){ctx.resume().then(function(){tocarTom(freq,duracao);}).catch(function(){});return;}
+      var osc=ctx.createOscillator(),gain=ctx.createGain(),inicio=ctx.currentTime;
+      osc.type='sine';osc.frequency.setValueAtTime(freq,inicio);
+      gain.gain.setValueAtTime(0.0001,inicio);
+      gain.gain.exponentialRampToValueAtTime(0.075,inicio+0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001,inicio+duracao);
+      osc.connect(gain);gain.connect(ctx.destination);osc.start(inicio);osc.stop(inicio+duracao+0.025);
+    }catch(e){}
+  }
+  function playFeedback(){if(vibracaoAtiva&&navigator.vibrate)navigator.vibrate(75);tocarTom(1050,.095);}
+  function playError(){if(vibracaoAtiva&&navigator.vibrate)navigator.vibrate([80,40,80]);tocarTom(420,.11);setTimeout(function(){tocarTom(320,.12);},130);}
+  function alternarSom(){somAtivo=!somAtivo;localStorage.setItem('SPX_MOBILE_SOUND',somAtivo?'ON':'OFF');el('soundBtn').textContent='♫ Som: '+(somAtivo?'ON':'OFF');if(somAtivo){desbloquearAudio();tocarTom(880,.1);}}
   function alternarVibracao(){vibracaoAtiva=!vibracaoAtiva;localStorage.setItem('SPX_MOBILE_VIBRATION',vibracaoAtiva?'ON':'OFF');el('vibrateBtn').textContent='▤ Vibração: '+(vibracaoAtiva?'ON':'OFF');}
   window.alternarSom=alternarSom;window.alternarVibracao=alternarVibracao;
 
@@ -202,11 +252,15 @@
     }catch(e){el('torchBtn').disabled=true;}
   }
   async function iniciarCamera(){
+    // Criar/resumir o áudio imediatamente dentro do clique do usuário.
+    desbloquearAudio();
     if(!bridgeReady){toast('Conecte primeiro ao Apps Script.');return;}
     if(!cycleActive){toast('Inicie um ciclo de inventário no painel Apps Script.');return;}
     if(cameraRunning)return;
     if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){toast('Este navegador não oferece acesso à câmera.');return;}
     try{
+      el('startCameraBtn').innerHTML='<span class="spinner"></span> Preparando scanner';
+      await carregarBibliotecaScanner();
       el('startCameraBtn').innerHTML='<span class="spinner"></span> Abrindo câmera';
       if(!camera)camera=new Html5Qrcode('reader',{formatsToSupport:supportedFormats(),verbose:false});
       await camera.start({facingMode:'environment'},{fps:15,qrbox:function(w,h){var width=Math.min(Math.floor(w*.84),360);return {width:width,height:Math.min(Math.floor(width*.62),230)};},aspectRatio:1.4},onDecoded,function(){});
@@ -234,24 +288,49 @@
     }catch(err){setBusy(false);playError();el('lastStatus').textContent='Erro';toast(err.message);}
   }
   function openConfirm(item){
-    currentAsset=item;el('modalEquipName').textContent=item.nome||'Equipamento';el('modalEquipCode').textContent='Serial: '+(item.codigo||'');el('modalEquipMeta').textContent='Responsável: '+(item.colab||'Não informado')+' • Último inventário: '+(item.dataUltimoInventario||'Sem registro');
+    currentAsset=item;confirmInProgress=false;confirmOperationCode='';confirmOperationId='';
+    el('confirmError').style.display='none';el('confirmError').textContent='';
+    el('modalEquipName').textContent=item.nome||'Equipamento';el('modalEquipCode').textContent='Serial: '+(item.codigo||'');el('modalEquipMeta').textContent='Responsável: '+(item.colab||'Não informado')+' • Último inventário: '+(item.dataUltimoInventario||'Sem registro');
     el('registeredLocation').value=item.local||'';el('assetColab').value=item.colab||'';el('assetEmail').value=item.emailAlocacao||'';el('assetState').value=item.estado||'🟢 Funcionando';el('assetStock').value=item.estoque||'🖥️ Em Uso na Operação';el('assetObs').value=item.observacao||'';
-    el('foundLocation').value=el('locationSelect').value||item.local||'';el('localWarn').style.display=(el('foundLocation').value!==item.local)?'block':'none';el('alreadyWarn').style.display=item.jaConferido?'block':'none';
-    el('foundLocation').onchange=function(){el('localWarn').style.display=(el('foundLocation').value!==item.local)?'block':'none';};
+    el('foundLocation').value=el('locationSelect').value||item.local||'';el('localWarn').style.display=(normalizarCodigo(el('foundLocation').value)!==normalizarCodigo(item.local))?'block':'none';el('alreadyWarn').style.display=item.jaConferido?'block':'none';
+    el('foundLocation').onchange=function(){el('localWarn').style.display=(String(el('foundLocation').value||'').trim().toLowerCase()!==String(item.local||'').trim().toLowerCase())?'block':'none';};
     el('confirmModal').classList.add('open');el('lastStatus').textContent='Aguardando confirmação';
   }
   function openNew(code){currentAsset={codigo:code};el('newEquipCode').textContent=code;el('newEquipName').value='';el('newEquipColab').value='';el('newEquipEmail').value='';el('newEquipLocation').value=el('locationSelect').value||'';el('newModal').classList.add('open');el('lastStatus').textContent='Novo equipamento';}
   async function confirmar(alterarLocal){
-    if(!currentAsset)return;
+    if(!currentAsset||confirmInProgress)return;
     var found=el('foundLocation').value;
-    if(alterarLocal && !found){toast('Selecione o local encontrado.');return;}
-    var payload={codigo:currentAsset.codigo,local:found,localEncontrado:found,alterarLocal:Boolean(alterarLocal),estoque:el('assetStock').value,colab:el('assetColab').value.trim(),emailAlocacao:el('assetEmail').value.trim(),estado:el('assetState').value,observacao:el('assetObs').value.trim(),origem:'MOBILE',operationId:randomId()};
-    document.querySelectorAll('#confirmModal button').forEach(function(b){b.disabled=true;});
-    try{var res=await request('CONFIRMAR',payload);if(!res||!res.ok)throw new Error((res&&res.mensagem)||'Não foi possível registrar a conferência.');
-      el('confirmModal').classList.remove('open');el('lastName').textContent=(res.nome||currentAsset.nome)+' • '+res.codigo;el('lastDetails').textContent='Local: '+(res.local||found)+' • Operador: '+(res.operador||'registrado');el('lastStatus').textContent=res.tipo==='REVALIDADO'?'Revalidado':'Confirmado';
-      toast(!alterarLocal && found && currentAsset.local && found!==currentAsset.local?'Conferência registrada; divergência de localização aberta para auditoria.':(res.mensagem||'Conferência registrada.'));await atualizarResumo();currentAsset=null;setBusy(false);
-    }catch(err){toast(err.message);playError();}
-    finally{document.querySelectorAll('#confirmModal button').forEach(function(b){b.disabled=false;});}
+    if(alterarLocal&&!found){toast('Selecione o local encontrado.');return;}
+    if(confirmOperationCode!==currentAsset.codigo){confirmOperationCode=currentAsset.codigo;confirmOperationId=randomId();}
+    var payload={codigo:currentAsset.codigo,local:found,localEncontrado:found,alterarLocal:Boolean(alterarLocal),estoque:el('assetStock').value,colab:el('assetColab').value.trim(),emailAlocacao:el('assetEmail').value.trim(),estado:el('assetState').value,observacao:el('assetObs').value.trim(),origem:'MOBILE',operationId:confirmOperationId};
+    confirmInProgress=true;
+    var buttons=[el('keepLocationBtn'),el('updateLocationBtn')];
+    buttons.forEach(function(b){b.disabled=true;});
+    el('confirmError').style.display='none';
+    var btn=alterarLocal?el('updateLocationBtn'):el('keepLocationBtn');
+    var labelOriginal=btn.textContent;btn.innerHTML='<span class="spinner"></span> Gravando...';
+    try{
+      var res=await request('CONFIRMAR',payload);
+      if(!res||!res.ok)throw new Error((res&&res.mensagem)||'O Apps Script não confirmou a gravação.');
+      var asset=currentAsset;
+      // Fecha e libera a câmera imediatamente após a confirmação persistida.
+      el('confirmModal').classList.remove('open');
+      el('confirmError').style.display='none';
+      el('lastName').textContent=(res.nome||asset.nome||'Equipamento')+' • '+res.codigo;
+      el('lastDetails').textContent='Local: '+(res.local||found)+' • Operador: '+(res.operador||'registrado');
+      el('lastStatus').textContent=res.tipo==='REVALIDADO'?'Revalidado':'Confirmado';
+      currentAsset=null;confirmOperationCode='';confirmOperationId='';setBusy(false);
+      toast(res.mensagem||'Conferência registrada com sucesso.');
+      // Preferir o resumo compacto retornado junto da confirmação. Isso evita
+      // uma segunda chamada ao Apps Script só para atualizar o percentual.
+      if(res.resumo) updateSummary(res.resumo); else atualizarResumo();
+    }catch(err){
+      var msg=err&&err.message?err.message:String(err||'Falha desconhecida');
+      el('confirmError').textContent=msg+' Você pode tentar novamente; a mesma operação será reutilizada para evitar duplicidade.';
+      el('confirmError').style.display='block';toast(msg);playError();
+    }finally{
+      confirmInProgress=false;buttons.forEach(function(b){b.disabled=false;});btn.textContent=labelOriginal;
+    }
   }
   window.confirmar=confirmar;
   async function cadastrarNovo(){
@@ -260,7 +339,7 @@
     try{var res=await request('CADASTRAR',payload);if(!res||!res.ok)throw new Error((res&&res.mensagem)||'Não foi possível cadastrar.');el('newModal').classList.remove('open');el('lastName').textContent=res.nome+' • '+res.codigo;el('lastDetails').textContent='Novo equipamento cadastrado em '+res.local;el('lastStatus').textContent='Cadastrado';toast(res.mensagem);currentAsset=null;await atualizarResumo();setBusy(false);}catch(err){toast(err.message);playError();}
   }
   window.cadastrarNovo=cadastrarNovo;
-  function cancelarModal(){el('confirmModal').classList.remove('open');el('newModal').classList.remove('open');currentAsset=null;setBusy(false);el('lastStatus').textContent='Leitura liberada';}
+  function cancelarModal(){if(confirmInProgress)return;el('confirmModal').classList.remove('open');el('newModal').classList.remove('open');currentAsset=null;confirmOperationCode='';confirmOperationId='';setBusy(false);el('lastStatus').textContent='Leitura liberada';}
   window.cancelarModal=cancelarModal;
   function lerManual(){if(!cycleActive){toast('Inicie um ciclo de inventário no painel Apps Script.');return;}var value=el('manualCode').value.trim();if(!value)return;el('manualCode').value='';onDecoded(value);}
   window.lerManual=lerManual;
@@ -272,6 +351,7 @@
   function irScanner(){document.querySelector('.camera-wrap').scrollIntoView({behavior:'smooth'});}
   window.irScanner=irScanner;
   if(window.opener&&!window.opener.closed&&bridgeId){handshake();}else{el('bridgeError').style.display='block';el('startCameraBtn').disabled=true;setCamStatus('Abra pelo Apps Script','err');}
+  document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible'&&bridgeReady)atualizarResumo();});
 })();
 </script>
 </body>
